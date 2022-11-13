@@ -1,0 +1,404 @@
+---
+title: "karts of the instant"
+output:
+  html_document: default
+  pdf_document: default
+date: '2022-11-11'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LOAD PACKAGES
+
+```{r}
+## Load packages
+# Data Prep and EDA
+library(knitr)
+library(tidyverse)
+library(corrplot)
+library(ggplot2)
+library(dplyr)
+# Logistic Reg. and Model Selection
+library(caTools)
+library(car)
+library(glmnet)
+library(caret)
+
+# ROC Curve
+library(pROC)
+
+#Cramer V
+library(rcompanion)
+
+```
+
+## DATA PREPARATION
+
+```{r}
+## Setting color codes
+
+# Set color codes
+gtblue = rgb(0, 48, 87, maxColorValue = 255)
+techgold = rgb(179, 163, 105, maxColorValue = 255)
+buzzgold = rgb(234, 170, 0, maxColorValue = 255)
+bobbyjones = rgb(55, 113, 23, maxColorValue = 255)
+
+```
+
+```{r}
+## Load Data
+
+dat <- read.csv("order_products_merged.csv", header=TRUE)
+```
+
+```{r}
+## Drop Unnecessary Columns
+dat <- subset(dat, select = -c(X, order_id, product_id, product_name, user_id, order_hour_of_day, department, aisle))
+
+```
+
+```{r}
+# Convert categorical variables to factors
+dat <- dat %>% mutate_at(vars(c(`reordered`, `aisle_id`, `department_id`, `order_dow`, `part_of_day`)), as.factor)
+
+```
+
+## EXPLORATORY DATA ANALYSIS
+
+### HISTOGRAMS
+
+```{r}
+###Barplot of reordered
+ggplot(data.frame(dat$reordered), aes(x=dat$reordered)) + geom_bar(col=techgold, fill=gtblue) + labs(title="reordered", x="reordered (1 = 'Yes', 0 = 'No')", y="Count")
+
+```
+
+
+### Relationship between reordered Response Variable and Numerical Variables 
+
+```{r}
+# Plot reordered against cart order
+boxplot(add_to_cart_order ~ reordered, main="reordered vs order added to cart", xlab="reordered",
+        ylab="order added to cart", col=c(techgold,buzzgold), data=dat, outline=FALSE)
+
+# Plot reordered against order number
+boxplot(order_number ~ reordered, main="reordered vs order number", xlab="reordered",
+        ylab="order number", col=c(techgold,buzzgold), data=dat, outline=FALSE)
+
+# Plot reordered against days since prior order
+boxplot(days_since_prior_order ~ reordered, main="reordered vs days since prior order", xlab="reordered", 
+        ylab="days", col=c(techgold,buzzgold), data=dat, outline=FALSE)
+
+
+```
+
+
+### Relationship between reordered Response Variable and Categorical Variables
+
+```{r}
+
+tb_aisle = xtabs(~dat$reordered + dat$aisle_id)
+barplot(prop.table(tb_aisle),axes=T,space=0.3,  cex.axis=1.5, cex.names=0.8,
+        xlab="Proportion of ordered vs not reordered",
+        horiz=T, col=c(gtblue,buzzgold),main="reordered by aisle ID", legend=TRUE)
+
+
+tb_dept = xtabs(~dat$reordered + dat$department_id)
+barplot(prop.table(tb_dept),axes=T,space=0.3,  cex.axis=1.5, cex.names=0.8,
+        xlab="Proportion of ordered vs not reordered",
+        horiz=T, col=c(gtblue,buzzgold),main="reordered by dept ID", legend=TRUE)
+
+tb_dow = xtabs(~dat$reordered + dat$order_dow)
+barplot(prop.table(tb_dow),axes=T,space=0.3,  cex.axis=1.5, cex.names=0.8,
+        xlab="Proportion of ordered vs not reordered",
+        horiz=T, col=c(gtblue,buzzgold),main="reordered by day of week", legend=TRUE)
+
+tb_pod = xtabs(~dat$reordered + dat$part_of_day)
+barplot(prop.table(tb_pod),axes=T,space=0.3,  cex.axis=1.5, cex.names=0.8,
+        xlab="Proportion of ordered vs not reordered",
+        horiz=T, col=c(gtblue,buzzgold),main="reordered by part of day", legend=TRUE)
+```
+
+### Correlation among the numeric variables
+
+```{r fig1, fig.height = 8, fig.width = 12}
+
+# Select numerical variables
+dat.num <- na.omit(dat[ , which(sapply(dat, is.numeric))])
+
+# Create correlation matrix
+corr <- cor(dat.num)
+# Create correlation plot
+col <- colorRampPalette(c(buzzgold,"white", gtblue))(10)
+corrplot(corr, method = "number", type = "upper", tl.col="black", col = col)
+
+
+
+```
+
+
+###NUMERICAL PREDICTOR STANDARDIZATION
+```{r}
+###SCALE DATA VALUES SUCH THAT OVERALL STATISTICAL SUMMARY OF EVERY VARIABLE
+###HAS A MEAN VALUE OF ZERO AND A UNIT VARIANCE VALUE
+
+dat_model <- dat
+
+dat_model$add_to_cart_order <- scale(dat_model$add_to_cart_order)
+dat_model$order_number <- scale(dat_model$order_number)
+dat_model$days_since_prior_order <- scale(dat_model$days_since_prior_order)
+
+```
+
+
+### Data Split - 70% Train 30%
+
+```{r}
+##Data Split- 70% Train 30% Test
+set.seed(1)
+split = sample.split(dat_model$reordered, SplitRatio = 0.7)
+train = subset(dat_model, split == TRUE)
+test = subset(dat_model, split == FALSE)
+
+cat("Number of reordered in Training Set = ", nrow(train[train$reordered == 1,]), 
+    "Number of not reordered in Training Set = ", nrow(train[train$reordered == 0,]),
+     "\nPercentage reordered in Training Set = ", nrow(train[train$reordered == 1,]) / nrow(train[train$reordered]))
+
+cat("\n\nNumber of reordered in Test Set = ", nrow(test[test$reordered == 1,]), 
+    "Number of not reordered in Test Set = ", nrow(test[test$reordered == 0,]),
+     "\nPercentage reordered in Test Set = ", nrow(test[test$reordered == 1,]) / nrow(test[test$reordered]))
+
+```
+### FULL MODEL CREATION
+
+```{r}
+### Build Logistic Regression Model
+
+full.model <- glm(reordered ~ ., family = "binomial", data = train)
+summary(full.model)
+
+```
+
+### Finding insignificant Variables
+
+```{r}
+# Coefficients
+which(summary(full.model)$coeff[,4]>0.05)
+```
+
+### Test for overall regression
+
+```{r}
+# Overall Significance
+gstat = full.model$null.deviance - deviance(full.model)
+pvalue = 1-pchisq(gstat,length(coef(full.model))-1)
+cbind(gstat, pvalue) 
+```
+
+
+###CATEGORICAL CORRELATION ASSESSMENT 
+```{r}
+cat("\nCramer V - REORDERED-ASILE:", cramerV(dat$reordered, dat$aisle_id, bias.correct=FALSE), "\n")
+cat("\nCramer V - REORDERED-DEPT:", cramerV(dat$reordered, dat$department_id, bias.correct=FALSE), "\n")
+cat("\nCramer V - REORDERED-DOW:", cramerV(dat$reordered, dat$order_dow, bias.correct=FALSE), "\n")
+cat("\nCramer V - REORDERED-POD:", cramerV(dat$reordered, dat$part_of_day, bias.correct=FALSE), "\n")
+cat("\nCramer V - AISLE-DEPT:", cramerV(dat$aisle_id, dat$department_id, bias.correct=FALSE), "\n")
+cat("\nCramer V - AISLE-DOW:", cramerV(dat$aisle_id, dat$order_dow, bias.correct=FALSE), "\n")
+cat("\nCramer V - AISLE-POD:", cramerV(dat$aisle_id, dat$part_of_day, bias.correct=FALSE), "\n")    
+cat("\nCramer V - DEPT-DOW:", cramerV(dat$department_id, dat$order_dow, bias.correct=FALSE), "\n")
+cat("\nCramer V - DEPT-POD:", cramerV(dat$department_id, dat$part_of_day, bias.correct=FALSE), "\n")    
+cat("\nCramer V - ORDER-POD:", cramerV(dat$order_dow, dat$part_of_day, bias.correct=FALSE), "\n")
+```
+
+
+
+```{r}
+# Calculating GVIF
+vifs <- vif(full.model)
+vifs
+cat("\nVIF Threshold:", max(10, 1/(1-summary(full.model)$r.squared)), "\n")
+```
+
+Error in vif.default(full.model) : 
+there are aliased coefficients in the model  
+
+This indicates perfect collearity between two variables
+
+
+### FULL MODEL MINUS DEPARTMENT_ID (PERFECT COLLINEARITY CORRECTION)
+
+```{r}
+##Dropping columns not considered further in this analysis
+drops2 <- c("department_id")
+train2 <- train[ , !(names(train) %in% drops2)]
+test2 <- test[ , !(names(test) %in% drops2)]
+
+```
+
+
+```{r}
+full.model2 <- glm(reordered ~ ., family = "binomial", data = train2)
+summary(full.model2)
+
+```
+
+```{r}
+# Overall Significance
+gstat2 = full.model2$null.deviance - deviance(full.model2)
+pvalue2 = 1-pchisq(gstat2,length(coef(full.model2))-1)
+cbind(gstat2, pvalue2) 
+```
+The overall model is statistically significant with a p-value of zero, indicating that the overall model has explanatory power.
+
+```{r}
+# Calculating GVIF
+vifs <- vif(full.model2)
+vifs
+cat("\nVIF Threshold:", max(10, 1/(1-summary(full.model2)$r.squared)), "\n")
+```
+
+###MODEL SELECTION
+
+```{r, results='asis'}
+###FORWARD-BACKWARD STEPWISE REGRESSION
+
+# Create minimum model including an intercept
+min.model <-  glm(reordered~ 1, family = "binomial", data = train)
+
+# Perform stepwise regression
+step.model <- step(min.model, scope = list(lower = min.model, upper = full.model),
+                  direction = "both", trace = FALSE)
+summary(step.model)
+which(summary(step.model)$coeff[,4]>0.05)
+
+# Identify variables not selected by F-B Stepwise regression
+index.step <- which(!(names(coef(full.model)) %in% names(coef(step.model))))
+cat("\n Variables not selected by forward-backward stepwise:",
+    names(coef(full.model)[index.step]))
+```
+
+
+```{r}
+# Stepwise Overall Significance
+gstat3 = step.model$null.deviance - deviance(step.model)
+pvalue3 = 1-pchisq(gstat3,length(coef(step.model))-1)
+cbind(gstat3, pvalue3) 
+
+```
+
+The overall model is statistically significant with a p-value of zero, indicating that the overall model has explanatory power.
+
+```{r}
+# Stepwise VIF
+vif3 <- vif(step.model)
+vif3
+cat("\nVIF Threshold:", max(10, 1/(1-summary(step.model)$r.squared)), "\n")
+
+```
+
+
+```{r}
+###ELASTIC NET
+
+# Set a seed for reproducibility
+set.seed(1)
+
+# Set predictors and response to correct format
+x.train <- model.matrix(reordered ~ ., train)[,-1]
+y.train <- train$reordered
+
+# Use cross validation to find optimal lambda
+cv.elnet <- cv.glmnet(x.train, y.train, alpha = 0.5, family = "binomial")
+
+# Train Elastic Net and display coefficients with optimal lambda
+elnet.model <- glmnet(x.train, y.train, alpha = 0.5, family = "binomial")
+coef(elnet.model, cv.elnet$lambda.min)
+
+# Identify variables not selected by Elastic Net
+index.elnet <- which(coef(elnet.model, cv.elnet$lambda.min) == 0)
+cat("\n Variables not selected by elastic net regression:",
+    names(coef(full.model)[index.elnet]))
+```
+
+
+### PREDICTION
+
+# Prediction on Test Model
+
+```{r}
+# 3. Prediction for the stepwise regression 
+
+# Obtain predicted probabilities for the test set
+pred.step = predict(step.model, newdata = test, type = "response")
+# Obtain classifications using a classification threshold of 0.5
+predClass.step = ifelse(pred.step > 0.5, 1, 0)
+
+# Create a data frame with the predictions
+preds = data.frame(reordered = test$reordered, predClass.step)
+```
+
+
+# Classification Evaluation Metrics without table
+
+```{r}
+###Convert to factor
+predClass.step.factorized = as.factor(predClass.step)
+
+# Confusion Matrix Display
+cat("\n\nSTEPWISE MODEL CONFUSION MATRIX\n\n")
+step_conmat <- confusionMatrix(data=predClass.step.factorized, reference=test$reordered, positive='1')
+step_conmat
+
+```
+
+```{r}
+# 4. Confusion Matrix without Table
+
+# 5. Build a confusion table and calculate metrics
+pred_metrics2 = function(modelName, actualClass, predClass) {
+  cat(modelName, '\n')
+  conmat <- confusionMatrix(predClass, actualClass, positive='1')
+  c(conmat$overall["Accuracy"], conmat$byClass["Sensitivity"],
+    conmat$byClass["Specificity"])
+}
+pred_metrics2("Stepwise Regression Model",test$reordered, predClass.step.factorized)
+
+```
+
+
+```{r}
+##REORDER COLUMNS FOR ROC CURVE
+col_order <- c("aisle_id","department_id","order_number","order_dow", "days_since_prior_order", "add_to_cart_order","part_of_day","reordered")
+
+test <- test[, col_order]
+
+```
+
+
+```{r}
+#ROC Curves
+roc(test[,8],pred.step, smoothed=TRUE, plot=TRUE,auc.polygon=TRUE,max.auc.polygon=TRUE,grid=TRUE,print.auc=TRUE,show.thres=TRUE,main="Stepwise Model ROC Curve",col=gtblue)
+
+
+```
+
+
+
+
+
+### GOODNESS OF FIT
+
+```{r}
+# Test for GOF : Using deviance residuals and check normality of deviance residuals
+res = resid(step.model, type="deviance")
+hist(res, main="Histogram of deviances",breaks = 8,xlab = "r_i")
+qqnorm(res)
+cbind(statistic = sum(res^2), pvalue = 1-pchisq(sum(res^2), step.model$df.resid))
+
+```
+
+
+
+

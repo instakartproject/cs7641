@@ -2,6 +2,7 @@
 ## Clustering Customers & Predicting Purchasing Behavior with Instacart Data
 
 ### Directory Structure
+```
 var routes = (
   <Route name="cs7641">
     <Route name="Archive">
@@ -22,7 +23,7 @@ var routes = (
     </Route>
   </Route>
 );
-
+```
 
 [LINK to Video](https://youtu.be/qpIzoOrf8SM)
 

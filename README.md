@@ -2,6 +2,7 @@
 ## Clustering Customers & Predicting Purchasing Behavior with Instacart Data
 
 ### Directory Structure
+```bash
 cs7641
 ├── Archive
 ├── EDA
@@ -10,7 +11,7 @@ cs7641
 ├── logistic_regression
     ├── Logistic regression
     ├── Logistic regression with feature engineering
-    
+```
 
 [LINK to Video](https://youtu.be/qpIzoOrf8SM)
 

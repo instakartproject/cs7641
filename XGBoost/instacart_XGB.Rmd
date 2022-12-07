@@ -1,0 +1,196 @@
+---
+title: "karts of the instant"
+output:
+  html_document: default
+  pdf_document: default
+date: '2022-11-11'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LOAD PACKAGES
+
+```{r}
+## Load packages
+# Data Prep and EDA
+library(knitr)
+library(tidyverse)
+library(corrplot)
+library(ggplot2)
+library(dplyr)
+# Logistic Reg. and Model Selection
+library(caTools)
+library(car)
+library(glmnet)
+library(caret)
+
+# ROC Curve
+library(pROC)
+
+#Cramer V
+library(rcompanion)
+
+#XGBoost
+library(xgboost)
+library(e1071)
+library(Ckmeans.1d.dp)
+
+# Random Forest
+library(randomForest)
+library(varImp)
+# ROC Curve
+library(pROC)
+
+###ONE HOT ENCODING
+library(mltools)
+library(data.table)
+
+```
+
+## DATA PREPARATION
+
+```{r}
+## Load Data
+
+dat <- read.csv("order_products_merged.csv", header=TRUE)
+```
+
+```{r}
+## Drop Unnecessary Columns
+dat <- subset(dat, select = -c(X, order_id, product_id, product_name, user_id, order_hour_of_day, aisle, aisle_id,
+                               department_id))
+
+```
+
+```{r}
+##REORDER COLUMNS FOR ROC CURVE
+col_order <- c("department","order_number","order_dow", "days_since_prior_order", "add_to_cart_order","part_of_day","reordered")
+
+dat <- dat[, col_order]
+```
+
+```{r}
+# Convert categorical variables to factors
+dat <- dat %>% mutate_at(vars(c(`department`, `order_dow`, `part_of_day`)), as.factor)
+
+```
+
+```{r}
+###One hot encoding of dummy categorical variables
+dat <- one_hot(as.data.table(dat))
+
+
+```
+
+
+###NUMERICAL PREDICTOR STANDARDIZATION
+```{r}
+###SCALE DATA VALUES SUCH THAT OVERALL STATISTICAL SUMMARY OF EVERY VARIABLE
+###HAS A MEAN VALUE OF ZERO AND A UNIT VARIANCE VALUE
+
+dat_model <- dat
+
+dat_model$add_to_cart_order <- scale(dat_model$add_to_cart_order)
+dat_model$order_number <- scale(dat_model$order_number)
+dat_model$days_since_prior_order <- scale(dat_model$days_since_prior_order)
+
+```
+
+
+### Data Split - 70% Train 30%
+
+```{r}
+##Data Split- 70% Train 30% Test
+set.seed(1)
+split = sample.split(dat_model$reordered, SplitRatio = 0.7)
+train = subset(dat_model, split == TRUE)
+test = subset(dat_model, split == FALSE)
+
+cat("Number of reordered in Training Set = ", nrow(train[train$reordered == 1,]), 
+    "Number of not reordered in Training Set = ", nrow(train[train$reordered == 0,]),
+     "\nPercentage reordered in Training Set = ", nrow(train[train$reordered == 1,]) / nrow(train[train$reordered]))
+
+cat("\n\nNumber of reordered in Test Set = ", nrow(test[test$reordered == 1,]), 
+    "Number of not reordered in Test Set = ", nrow(test[test$reordered == 0,]),
+     "\nPercentage reordered in Test Set = ", nrow(test[test$reordered == 1,]) / nrow(test[test$reordered]))
+
+```
+```{r}
+memory.limit(10 * 10^10)
+
+```
+###XGBOOST
+
+```{r}
+###matrix set up
+
+dtrain <- xgb.DMatrix(data=as.matrix(train[,-39]), label=as.matrix(train$reordered))
+dtest <- xgb.DMatrix(data=as.matrix(test[,-39]), label=as.matrix(test$reordered))
+
+```
+
+```{r}
+###parameters
+
+params <- list(booster = "gbtree", objective = "binary:logistic", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+
+```
+
+
+```{r}
+# 1. Find Number of Best Rounds via Cross Validation
+xgcv <- xgb.cv(params = params, data = dtrain, nrounds= 100, 
+               nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20,
+               maximize = F)
+
+```
+
+```{r}
+###MODEL TRAINING
+xgb1 <- xgb.train (params = params, data = dtrain, nrounds = 79, watchlist = list(val=dtest,train=dtrain), print.every.n = 10, early.stop.round = 10, maximize = F , eval_metric = "error")
+
+
+```
+
+
+
+
+
+```{r}
+# 2. Feature Importance
+mat <- xgb.importance(feature_names = colnames(as.matrix(train[,-39])), model = xgb1)
+xgb.ggplot.importance(importance_matrix = mat[1:10])
+
+
+
+```
+```{r}
+# 3. Predict using XGBoost Model
+pred_test <- predict(xgb1, dtest, type="response")
+predClass = ifelse(pred_test > 0.5, 1, 0)
+
+
+# Create a data frame with the predictions
+preds = data.frame(reordered = test$reordered, predClass)
+```
+
+```{r}
+###Convert to factor
+predClass.factorized = as.factor(predClass)
+
+# Confusion Matrix Display
+cat("\n\nSTEPWISE MODEL CONFUSION MATRIX\n\n")
+conmat <- confusionMatrix(data=predClass.factorized, reference=test$reordered, positive='1')
+conmat
+
+```
+
+```{r}
+###ROC Curves
+
+roc(response = test$reordered, predictor = predClass, smoothed=TRUE, plot=TRUE, print.auc=TRUE,
+    auc.polygon=TRUE,max.auc.polygon=TRUE,grid=TRUE,show.thres=TRUE,main='XGBoost ROC Curve')
+
+```
